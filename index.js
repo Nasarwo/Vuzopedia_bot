@@ -3,13 +3,9 @@ const { Bot, GrammyError, HttpError, InlineKeyboard } = require("grammy");
 
 const bot = new Bot(process.env.TOKEN);
 
-// let objects = [];
-// let object = {
-//   name: "",
-//   score: null,
-// };
-
 const selectedOptions = new Set();
+const scores = {};
+const userStates = {};
 
 bot.api.setMyCommands([
   {
@@ -54,6 +50,15 @@ function generateKeyboard() {
   return keyboard;
 }
 
+// // Функция для создания клавиатуры для выбора баллов
+// function generateScoreKeyboard(subject) {
+//   const keyboard = new InlineKeyboard();
+//   for (let i = 50; i <= 100; i += 5) {
+//     keyboard.text(`${i}`, `score_${subject}_${i}`).row();
+//   }
+//   return keyboard;
+// }
+
 // Обработчик для нажатия на кнопки
 bot.on("callback_query:data", async (ctx) => {
   const callbackData = ctx.callbackQuery.data;
@@ -64,17 +69,23 @@ bot.on("callback_query:data", async (ctx) => {
     } else {
       await ctx.answerCallbackQuery("Выбор завершён!");
       await ctx.editMessageText(
-        `Вы выбрали: ${Array.from(selectedOptions).join(", ") || "ничего"}.`
+        `Вы выбрали: ${
+          Array.from(selectedOptions).join(", ") || "ничего"
+        }.\n\nВаши баллы:\n${formatScores()}`
       );
     }
     return;
   }
 
-  // Добавляем или удаляем выбранную опцию
+  // Если нажали на предмет, запрашиваем баллы
   if (selectedOptions.has(callbackData)) {
     selectedOptions.delete(callbackData);
   } else {
     selectedOptions.add(callbackData);
+    userStates[ctx.from.id] = { subject: callbackData }; // Устанавливаем предмет
+    await ctx.answerCallbackQuery();
+    await ctx.reply(`Введите количество баллов для предмета: ${callbackData}`);
+    return;
   }
 
   // Обновляем клавиатуру
@@ -82,10 +93,44 @@ bot.on("callback_query:data", async (ctx) => {
     reply_markup: generateKeyboard(),
   });
 
-  // Сообщение пользователю
   await ctx.answerCallbackQuery(`Вы выбрали: ${callbackData}`);
-  for (let i = 0; i < selectedOptions.length; i++) {}
 });
+
+// Обработчик текстовых сообщений для ввода баллов
+bot.on("message:text", async (ctx) => {
+  const userState = userStates[ctx.from.id];
+  if (userState && userState.subject) {
+    const subject = userState.subject;
+    const score = parseInt(ctx.message.text, 10);
+
+    if (isNaN(score) || score < 0 || score > 100) {
+      await ctx.reply(
+        "Пожалуйста, введите корректное количество баллов (число от 0 до 100)."
+      );
+      return;
+    }
+
+    // Сохраняем баллы и сбрасываем состояние пользователя
+    scores[subject] = score;
+    delete userStates[ctx.from.id];
+
+    await ctx.reply(`Вы ввели ${score} баллов для предмета "${subject}".`);
+
+    // Возвращаем обновленную клавиатуру
+    const keyboard = generateKeyboard();
+    await ctx.reply("Выберите следующий предмет или завершите выбор:", {
+      reply_markup: keyboard,
+    });
+  }
+});
+
+// Форматирование списка баллов
+function formatScores() {
+  if (Object.keys(scores).length === 0) return "Пока нет данных.";
+  return Object.entries(scores)
+    .map(([subject, score]) => `${subject}: ${score} баллов`)
+    .join("\n");
+}
 
 // bot.hears("Русский язык", async (ctx) => {
 //   object.name = message.text;
