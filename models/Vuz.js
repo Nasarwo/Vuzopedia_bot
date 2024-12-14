@@ -9,6 +9,9 @@ const VuzSchema = new Schema(
     description: {
       type: String,
     },
+    link: {
+      type: String,
+    },
     objects: {
       type: Array,
       required: true,
@@ -19,4 +22,4 @@ const VuzSchema = new Schema(
 );
 
 // Экспорт схемы как модели
-export const VuzModel = model("Vuz", VuzSchema);
+export default model("Vuz", VuzSchema);
