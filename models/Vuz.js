@@ -17,6 +17,10 @@ const VuzSchema = new Schema(
       required: true,
       default: 0,
     },
+    image: {
+      type: String, // URL изображения
+      required: false, // Необязательное поле
+    },
   },
   { timestamps: true }
 );

@@ -1,8 +1,11 @@
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
 dotenv.config();
-import { Bot, GrammyError, HttpError, InlineKeyboard } from "grammy";
+import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile } from "grammy";
 import mongoose from "mongoose";
 import vuzModel from "./models/Vuz.js";
+import { createReadStream } from "fs";
 
 const bot = new Bot(process.env.TOKEN);
 const DB_NAME = process.env.DB_NAME;
@@ -99,12 +102,67 @@ bot.on("message:text", async (ctx) => {
     // Шаг 3: Ожидание ссылки на сайт
     if (userState.step === "awaiting_link") {
       userStates[userId].link = ctx.message.text;
-      userStates[userId].step = "awaiting_subjects"; // Переход к следующему шагу
-      await ctx.reply("Введите список предметов, разделяя их запятыми:");
+      userStates[userId].step = "awaiting_image"; // Переход к следующему шагу
+      await ctx.reply("Отправьте изображение вуза:");
       return;
     }
 
-    // Шаг 4: Ожидание списка предметов
+    // Шаг 4: Ожидание загрузки изображения
+    if (userState.step === "awaiting_image") {
+      console.log("Шаг: Изображение обнаружено");
+      if (!ctx.message.photo || ctx.message.photo.length === 0) {
+        await ctx.reply("Пожалуйста, отправьте изображение.");
+        return;
+      }
+      console.log("Шаг: Изображение обнаружено");
+      // Получаем наибольшую версию изображения
+      const photo = ctx.message.photo[ctx.message.photo.length - 1];
+      const fileId = photo.file_id;
+
+      try {
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        const fileId = photo.file_id;
+
+        // Получаем ссылку на файл
+        const file = await bot.api.getFile(fileId);
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.TOKEN}/${file.file_path}`;
+
+        // Генерируем уникальное имя файла
+        const fileName = `${userState.name.replace(
+          /\s+/g,
+          "_"
+        )}_${Date.now()}.jpg`;
+        const filePath = `./images/${fileName}`;
+
+        // Скачиваем изображение
+        const axios = (await import("axios")).default;
+        const response = await axios({
+          method: "get",
+          url: fileUrl,
+          responseType: "stream",
+        });
+
+        // Сохраняем файл
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+          writer.on("finish", resolve);
+          writer.on("error", reject);
+        });
+
+        userStates[userId].image = fileName; // Сохраняем имя файла
+        userStates[userId].step = "awaiting_subjects"; // Переход к следующему шагу
+        await ctx.reply("Изображение сохранено. Введите список предметов:");
+      } catch (error) {
+        console.error("Ошибка при загрузке изображения:", error);
+        await ctx.reply("Не удалось сохранить изображение. Попробуйте снова.");
+      }
+
+      return;
+    }
+
+    // Шаг 5: Ожидание списка предметов
     if (userState.step === "awaiting_subjects") {
       const subjects = ctx.message.text.split(",").map((s) => s.trim());
 
@@ -121,6 +179,7 @@ bot.on("message:text", async (ctx) => {
         description: userState.description,
         link: userState.link,
         objects: subjects,
+        image: userState.image || null,
       });
 
       // Сбрасываем состояние
@@ -129,7 +188,9 @@ bot.on("message:text", async (ctx) => {
       await ctx.reply(
         `Данные сохранены:\n\nНазвание: ${userState.name}\nОписание: ${
           userState.description
-        }\nСсылка: ${userState.link}\nПредметы: ${subjects.join(", ")}`
+        }\nСсылка: ${userState.link}\nИзображение: ${
+          userState.image ? "добавлено" : "нет"
+        }\nПредметы: ${subjects.join(", ")}`
       );
       return;
     }
@@ -165,6 +226,55 @@ bot.on("message:text", async (ctx) => {
         reply_markup: keyboard,
       });
     }
+  }
+});
+
+bot.on("message:photo", async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const userState = userStates[userId];
+
+    if (!userState || userState.step !== "awaiting_image") {
+      await ctx.reply("Изображения пока не требуются. Следуйте инструкциям.");
+      return;
+    }
+
+    const photo = ctx.message.photo[ctx.message.photo.length - 1]; // Берём последнее изображение (наибольшего размера)
+    const fileId = photo.file_id;
+
+    // Получаем файл от Telegram
+    const file = await bot.api.getFile(fileId);
+    const fileUrl = `https://api.telegram.org/file/bot${process.env.TOKEN}/${file.file_path}`;
+
+    // Генерируем уникальное имя файла
+    const fileName = `${userState.name.replace(/\s+/g, "_")}_${Date.now()}.jpg`;
+    const filePath = `./images/${fileName}`;
+
+    // Скачиваем и сохраняем изображение
+    const axios = (await import("axios")).default;
+    const response = await axios({
+      method: "get",
+      url: fileUrl,
+      responseType: "stream",
+    });
+
+    const fs = await import("fs");
+    const writer = fs.createWriteStream(filePath);
+
+    response.data.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on("finish", resolve);
+      writer.on("error", reject);
+    });
+
+    // Сохраняем имя изображения в состоянии пользователя
+    userStates[userId].image = fileName;
+    userStates[userId].step = "awaiting_subjects"; // Переходим к следующему шагу
+    await ctx.reply("Изображение сохранено. Введите список предметов:");
+  } catch (error) {
+    console.error("Ошибка при обработке изображения:", error);
+    await ctx.reply("Не удалось сохранить изображение. Попробуйте снова.");
   }
 });
 
@@ -204,18 +314,47 @@ bot.on("callback_query:data", async (ctx) => {
 
     const selectedSubjects = Array.from(selectedOptions);
     const universities = await findUniversitiesBySubjects(selectedSubjects);
+    const fs = await import("fs");
+
+    const _filename = fileURLToPath(import.meta.url);
+    const _dirname = dirname(_filename);
 
     if (universities.length > 0) {
-      const universityList = universities
-        .map(
-          (uni) =>
-            `Название: ${uni.name}\nОписание: ${uni.description}\nСайт: ${
-              uni.link || "Ссылка отсутствует"
-            }\nПредметы: ${uni.objects.join(", ")}`
-        )
-        .join("\n\n");
+      for (const uni of universities) {
+        const imagePath = uni.image
+          ? resolve(_dirname, "images", uni.image)
+          : null;
 
-      await ctx.reply(`Найдены подходящие вузы:\n\n${universityList}`);
+        try {
+          if (imagePath && fs.existsSync(imagePath)) {
+            // Отправляем изображение, если оно есть
+            const imageFile = await new InputFile(createReadStream(imagePath));
+            await ctx.replyWithPhoto(imageFile, {
+              caption: `*${uni.name}*\n\n${
+                uni.description
+              }\n\nПредметы: ${uni.objects.join(", ")}`,
+              parse_mode: "MarkdownV2",
+              reply_markup: new InlineKeyboard().url("Сайт", uni.link || "#"),
+            });
+          } else {
+            // Если изображения нет, отправляем только текст
+            await ctx.reply(
+              `<strong>${uni.name}</strong>\n\n${
+                uni.description
+              }\n\nПредметы: ${uni.objects.join(", ")}`,
+              {
+                parse_mode: "HTML",
+                reply_markup: new InlineKeyboard().url("Сайт", uni.link || "#"),
+              }
+            );
+          }
+        } catch (error) {
+          console.error("Ошибка отправки сообщения:", error);
+          await ctx.reply(
+            `Не удалось отправить данные для вуза: ${uni.name}. Пожалуйста, попробуйте позже.`
+          );
+        }
+      }
     } else {
       await ctx.reply(
         "К сожалению, не найдено вузов, соответствующих выбранным предметам."
