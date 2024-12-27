@@ -11,19 +11,25 @@ const VuzSchema = new Schema(
     },
     link: {
       type: String,
-    },
-    objects: {
-      type: Array,
       required: true,
-      default: 0,
+    },
+    directions: {
+      type: [String], // Список направлений, связанных с вузом
+      required: true,
+    },
+    direction_links: {
+      type: [String],
+    },
+    region: {
+      type: String,
+      required: true,
     },
     image: {
       type: String, // URL изображения
-      required: false, // Необязательное поле
+      default: null,
     },
   },
   { timestamps: true }
 );
 
-// Экспорт схемы как модели
 export default model("Vuz", VuzSchema);
